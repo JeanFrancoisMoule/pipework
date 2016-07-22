@@ -159,12 +159,15 @@ done < /proc/mounts
 
 # Try to find a cgroup matching exactly the provided name.
 N=$(find "$CGROUPMNT" -name "$GUESTNAME" | wc -l)
+echo "CGROUPMNT : $CGROUPMNT"
+echo "N : $N"
 case "$N" in
   0)
     # If we didn't find anything, try to lookup the container with Docker.
     if installed docker; then
       RETRIES=3
       while [ "$RETRIES" -gt 0 ]; do
+        echo "GUESTNAME $GUESTNAME"
         DOCKERPID=$(docker inspect --format='{{ .State.Pid }}' "$GUESTNAME")
         [ "$DOCKERPID" != 0 ] && break
         sleep 1
@@ -182,7 +185,10 @@ case "$N" in
       die 1 "Container $GUESTNAME not found, and Docker not installed."
     fi
     ;;
-  1) true ;;
+  1) 
+    DOCKERPID=$(docker inspect --format='{{ .State.Pid }}' "$GUESTNAME")
+    echo "DOCKERPID : $DOCKERPID"
+    ;;
   *) die 1 "Found more than one container matching $GUESTNAME." ;;
 esac
 
@@ -194,6 +200,7 @@ esac
 	    # Use Docker-specific strategy to run the DHCP client
 	    # from the busybox image, in the network namespace of
 	    # the container.
+          
 	    if ! [ "$DOCKERPID" ]; then
 	      warn "You asked for a Docker-specific DHCP method."
 	      warn "However, $GUESTNAME doesn't seem to be a Docker container."
@@ -201,6 +208,7 @@ esac
 	      die 1 "Aborting."
 	    fi
 	    DHCP_CLIENT=${IPADDR%%:*}
+            echo "DHCP_CLIENT : $DHCP_CLIENT"
 	    ;;
 	  udhcpc|udhcpc:*|udhcpc-f|udhcpc-f:*|dhcpcd|dhcpcd:*|dhclient|dhclient:*|dhclient-f|dhclient-f:*)
 	    DHCP_CLIENT=${IPADDR%%:*}
@@ -355,8 +363,11 @@ if [ "$IFTYPE" = route ]; then
   ip netns exec "$NSPID" ip route "$@"
 else 
   # Otherwise, run normally.
+  echo " ip link set $GUEST_IFNAME netns $NSPID"
   ip link set "$GUEST_IFNAME" netns "$NSPID"
+  echo " ip netns exec $NSPID ip link set $GUEST_IFNAME name $CONTAINER_IFNAME"
   ip netns exec "$NSPID" ip link set "$GUEST_IFNAME" name "$CONTAINER_IFNAME"
+  [ "$MACADDR" ] &&  echo "ip netns exec $NSPID ip link set dev $CONTAINER_IFNAME address $MACADDR"
   [ "$MACADDR" ] && ip netns exec "$NSPID" ip link set dev "$CONTAINER_IFNAME" address "$MACADDR"
 
 	# When using any of the DHCP methods, we start a DHCP client in the
@@ -366,6 +377,7 @@ else
 	# use a locally installed client.
 	case "$DHCP_CLIENT" in
 	  dhcp)
+   	    echo " docker run -d --net container:$GUESTNAME --cap-add NET_ADMIN busybox udhcpc -i $CONTAINER_IFNAME -x hostname:$GUESTNAME $DHCP_OPTIONS"
 	    docker run -d --net container:$GUESTNAME --cap-add NET_ADMIN \
 	           busybox udhcpc -i "$CONTAINER_IFNAME" -x "hostname:$GUESTNAME" \
 	           $DHCP_OPTIONS \
@@ -421,6 +433,7 @@ else
   # Give our ARP neighbors a nudge about the new interface
   if installed arping; then
     IPADDR=$(echo "$IPADDR" | cut -d/ -f1)
+    echo " ip netns exec $NSPID arping -c 1 -A -I $CONTAINER_IFNAME $IPADDR"
     ip netns exec "$NSPID" arping -c 1 -A -I "$CONTAINER_IFNAME" "$IPADDR" > /dev/null 2>&1 || true
   else
     echo "Warning: arping not found; interface may not be immediately reachable"
